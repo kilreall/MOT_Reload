@@ -1,7 +1,7 @@
 import numpy as np 
 import matplotlib.pyplot as plt
 from numba import njit, prange
-
+##3
 
 def rvv(m, n): # m случайных единичных векторов в n-мерном пространстве и их сумма медленно
     vectors = np.empty((m, n))
