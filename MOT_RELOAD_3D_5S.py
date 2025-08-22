@@ -15,12 +15,12 @@ def rvv(m, n): # m случайных единичных векторов в n-�
 
 
 @njit(parallel = True)
-def rand_vec_sum(n_ph, dtt, sc_c): # counting changing of v and r because of photon scattering
+def rand_vec_sum(sc_cf): # counting changing of v and r because of photon scattering
     vec = np.random.normal(0, 1, (n_ph, 3))
     sum_of_squares = np.sum(vec ** 2, axis=1)
     norms = np.sqrt(sum_of_squares)
     vec = vec / norms.reshape(-1, 1)
-    da = vec*sc_c
+    da = vec*sc_c*sc_cf
     dv = da*dtt
     dr = dv*dtt
     dv = np.sum(dv, axis=0)
@@ -55,9 +55,27 @@ def R(axis, x, y, z, v, Ml, Mu, os):  # scattering rate with magnetic field
 def Rrb(v, s):  # scattering rate for retrback beams
     return Y/2/(1+s+4*(dw-k*v)**2/Y**2)*s #incorrect
 
+@njit
+def simpli_ph_scatt(sc_cf, i, j, x, vx, y, vy, z, vz): # simplified photon scattering applying
+    if sd(0, x[i+j], y[i+j], z[i+j]) + sd(1, x[i+j], y[i+j], z[i+j]) + sd(2, x[i+j], y[i+j], z[i+j]) != 0:
+        dvdr = rand_vec_sum(sc_cf)
+
+        z[i+j+1] += dvdr[1][2]
+        vz[i+j+1] += dvdr[0][2]
+
+        x[i+j+1] += dvdr[1][0]
+        vx[i+j+1] += dvdr[0][0]
+
+        y[i+j+1] += dvdr[1][1]
+        vy[i+j+1] += dvdr[0][1]
+
+    return 1
+
+
+
 @njit(parallel = True)
 def one_atom_sim(stv):
-    x0, vx0, y0, vy0, z0, vz0 = stv # старотовые значения
+    x0, vx0, y0, vy0, z0, vz0 = stv # стартовые значения
     # Nu = np.zeros(7)
     # Nl = np.array([1/5, 1/5, 1/5, 1/5, 1/5])
     
@@ -180,17 +198,7 @@ def one_atom_sim(stv):
             vy[i+j+1] = vy[i+j] + ay*dt
 
             # simplified photon scattering
-            if sd(0, x[i+j], y[i+j], z[i+j]) + sd(1, x[i+j], y[i+j], z[i+j]) + sd(2, x[i+j], y[i+j], z[i+j]) != 0:
-                dvdr = rand_vec_sum(n_ph, dtt, sc_c)
-
-                z[i+j+1] = z[i+j+1] + dvdr[1][2]
-                vz[i+j+1] = vz[i+j+1] + dvdr[0][2]
-
-                x[i+j+1] = x[i+j+1] + dvdr[1][0]
-                vx[i+j+1] = vx[i+j+1] + dvdr[0][0]
-
-                y[i+j+1] = y[i+j+1] + dvdr[1][1]
-                vy[i+j+1] = vy[i+j+1] + dvdr[0][1]
+            simpli_ph_scatt(1, i, j, x, vx, y, vy, z, vz)
   
             print(dt*(i+j)/TSIM*100, "%")
             j +=1
@@ -228,22 +236,40 @@ def one_atom_sim(stv):
             vy[i+j+1] = vy[i+j] + ay*dt
 
             # simplified photon scattering
-            if sd(0, x[i+j], y[i+j], z[i+j]) + sd(1, x[i+j], y[i+j], z[i+j]) + sd(2, x[i+j], y[i+j], z[i+j]) != 0:
-                dvdr = rand_vec_sum(n_ph, dtt, sc_c*sc_cDS)
-
-                z[i+j+1] = z[i+j+1] + dvdr[1][2]
-                vz[i+j+1] = vz[i+j+1] + dvdr[0][2]
-
-                x[i+j+1] = x[i+j+1] + dvdr[1][0]
-                vx[i+j+1] = vx[i+j+1] + dvdr[0][0]
-
-                y[i+j+1] = y[i+j+1] + dvdr[1][1]
-                vy[i+j+1] = vy[i+j+1] + dvdr[0][1]
+            simpli_ph_scatt(sc_cDS, i, j, x, vx, y, vy, z, vz)
 
             print(dt*(i+j)/TSIM*100, "%")
             j += 1
         i += j
         print(dt*(i+j)/TSIM*100, "%")
+
+        # fontain throw
+        j = 0
+        while j < int(TRB/dt) and i+j < int(TSIM/dt):
+            #accelaration due to light force
+            az = fk*( Rrb(+vz[i+j], sd(0, x[i+j], y[i+j], z[i+j])*s1) 
+                            - Rrb(-vz[i+j], sd(0, x[i+j], y[i+j], z[i+j])*s2))
+            az -= g # gravity
+
+            # new speed and coordinate
+            z[i+j+1] = z[i+j]+vz[i+j]*dt
+            vz[i+j+1] = vz[i+j] + az*dt
+
+            x[i+j+1] = x[i+j]+vx[i+j]*dt
+            vx[i+j+1] = vx[i+j]
+
+            y[i+j+1] = y[i+j]+vy[i+j]*dt
+            vy[i+j+1] = vy[i+j]
+
+            # simplified photon scattering
+            simpli_ph_scatt(sc_cF, i, j, x, vx, y, vy, z, vz)
+
+
+            j += 1
+            print(dt*(i+j)/TSIM*100, "%")
+        i += j
+        print(dt*(i+j)/TSIM*100, "%")
+
 
         # fall old realization
         j = 0
@@ -283,42 +309,6 @@ def one_atom_sim(stv):
 
         # i += Nc
             
-        # # return back
-        j = 0
-        while j < int(TRB/dt) and i+j < int(TSIM/dt):
-            #accelaration due to light force
-            az = fk*( Rrb(+vz[i+j], sd(0, x[i+j], y[i+j], z[i+j])*s1) 
-                            - Rrb(-vz[i+j], sd(0, x[i+j], y[i+j], z[i+j])*s2))
-            az -= g # gravity
-
-            # new speed and coordinate
-            z[i+j+1] = z[i+j]+vz[i+j]*dt
-            vz[i+j+1] = vz[i+j] + az*dt
-
-            x[i+j+1] = x[i+j]+vx[i+j]*dt
-            vx[i+j+1] = vx[i+j]
-
-            y[i+j+1] = y[i+j]+vy[i+j]*dt
-            vy[i+j+1] = vy[i+j]
-
-            # simplified photon scattering
-            if sd(0, x[i+j], y[i+j], z[i+j]) + sd(1, x[i+j], y[i+j], z[i+j]) + sd(2, x[i+j], y[i+j], z[i+j]) != 0:
-                dvdr = rand_vec_sum(n_ph, dtt, sc_c*sc_cDS) # sc_cDS from doppler is ok because it is 1/3 - online one direction used while realoading 
-
-                z[i+j+1] = z[i+j+1] + dvdr[1][2]
-                vz[i+j+1] = vz[i+j+1] + dvdr[0][2]
-
-                x[i+j+1] = x[i+j+1] + dvdr[1][0]
-                vx[i+j+1] = vx[i+j+1] + dvdr[0][0]
-
-                y[i+j+1] = y[i+j+1] + dvdr[1][1]
-                vy[i+j+1] = vy[i+j+1] + dvdr[0][1]
-
-
-            j += 1
-            print(dt*(i+j)/TSIM*100, "%")
-        i += j
-        print(dt*(i+j)/TSIM*100, "%")
 
 
     # separation
@@ -418,14 +408,14 @@ A = 1500*1e-4 # Tl/m - B grad
 TMOL = 20e-3
 TSD = 10e-3 # subdoppler time
 T = 60e-3
-TRB = 40e-3 # atoms MOT reload time
+TRB = 0.1e-3 # atoms MOT reload/fontain time
 TSIM = 300e-3
 I0 = 1.7 # mW/cm^2 
 I = 5 #mW/cm^2 - picture or 2 mW/cm^2 - 6 mW full energy
 s = I/I0 # saturation peak r = 0
 rl2 = 15e-3**2 # laser beam radius ^2
 re2 = 10e-3**2 # laser beam 1/e^2 radius ^2
-s1, s2 = 1, 0.3
+s1, s2 = 1, 0.588
 s1, s2 = s1/s, s2/s # It is needed because of presense of "s" in sd (satdist) function
 Nl = np.array([0.25570579682352823, 0.07815520905720487, 0.078038171580307, 0.07824747837591599, 0.2565783535707158])
 Nu = np.array([0.08249243609654235, 0.018835495263264144, 0.01881647571398126, 0.012523392863259803, 0.018845918641934044, 0.018882228353764675, 0.08287904365948709])
@@ -435,6 +425,7 @@ dydt = Y*np.sum(Nu) # photon scattering rate
 dtt = 1/dydt # time  for one photon scattering ~ 10-7
 sc_c = fk*Y*np.sum(Nu) # scattering const before rand vec
 sc_cDS = 1/3 # scatt const fix for subdoppler cooling
+sc_cF = 1/3 # scatt const fix for fontain - 1 direction 
 n_ph = 400 # amount of scattering photons per step; 10-100 for fast count
 dt = dtt*n_ph # time step n_ph = 100 ~ 1e-5
 t = np.arange(0, int(TSIM/dt)+1)*dt # simulation time step range
@@ -455,7 +446,7 @@ os00 = 3/5
 #n_atom_sim()
 
 # for one atom
-vz0, vx0, vy0 = 0., 0., 0.
+vz0, vx0, vy0 = 3., 0., 0.
 z0, x0, y0 = -10e-3, 0., 0.
 stv = [x0, vx0, y0, vy0, z0, vz0]
 x, vx, y, vy, z, vz = one_atom_sim(stv)
